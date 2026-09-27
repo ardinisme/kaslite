@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KasLite</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'class' }</script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --ink: #111827;
+    --paper: #f9fafb;
+    --paper2: #f3f4f6;
+    --accent: #10b981;
+    --expense: #ef4444;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --card: #ffffff;
+    --shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    --radius: 12px;
+  }
+  .dark {
+    --ink: #f9fafb;
+    --paper: #111827;
+    --paper2: #1f2937;
+    --accent: #34d399;
+    --expense: #f87171;
+    --muted: #9ca3af;
+    --border: #374151;
+    --card: #1f2937;
+    --shadow: 0 10px 15px -3px rgba(0,0,0,0.5);
+  }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    transition: background 0.2s, color 0.2s;
+  }
+  
+  @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+  @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+  .spin { animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .anim-up { animation: fadeUp 0.3s ease-out both; }
+  .anim-in { animation: fadeIn 0.2s ease-out both; }
+  
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .btn-primary {
+    background: var(--ink); color: var(--paper); border: 2px solid var(--ink);
+    border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 14px;
+    cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-primary:hover { opacity: 0.85; transform: translateY(-1px); }
+
+  .btn-ghost {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-weight: 500; font-size: 13px;
+    cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--ink); background: var(--paper2); }
+
+  .input-field {
+    width: 100%; background: var(--paper2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 14px; color: var(--ink);
+    outline: none; transition: border-color 0.15s;
+  }
+  .input-field:focus { border-color: var(--accent); }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+    z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.2); width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto;
+  }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 200; background: var(--ink); color: var(--paper);
+    padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15); animation: slideIn 0.3s cubic-bezier(0.34,1.2,0.64,1) both;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+import { h, render } from 'https://esm.sh/preact@10.19.6';
+import { useState, useMemo, useEffect, useCallback } from 'https://esm.sh/preact@10.19.6/hooks';
+import htm from 'https://esm.sh/htm@3.1.1';
+
+const html = htm.bind(h);
+
+const GAS_TEMPLATE = `// Gunakan ini pada Google Apps Script (script.new)
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    
+    // Mode Sinkronisasi Total (Frontend adalah master)
+    sheet.clear(); 
+    sheet.appendRow(["ID", "Tanggal", "Keterangan", "Jenis", "Nominal", "Timestamp"]);
+    sheet.getRange(1, 1, 1, 6).setFontWeight("bold");
+    
+    if(data.txs && data.txs.length > 0) {
+      var rows = data.txs.map(function(t) {
+        return [t.id, t.tanggal, t.keterangan, t.jenis, t.nominal, t.createdAt];
+      });
+      sheet.getRange(2, 1, rows.length, 6).setValues(rows);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ok: true})).setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  var data = sheet.getDataRange().getValues();
+  var txs = [];
+  // Mulai dari indeks 1 untuk melewati Header
+  for(var i = 1; i < data.length; i++) {
+    if(data[i][0]) {
+      txs.push({
+        id: data[i][0], tanggal: data[i][1], keterangan: data[i][2],
+        jenis: data[i][3], nominal: Number(data[i][4]), createdAt: data[i][5]
+      });
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({txs: txs})).setMimeType(ContentService.MimeType.JSON);
+}`;
+
+// ─── LOCAL STORAGE WRAPPER ───
+const LS = {
+  get: (k, fallback = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+
+// ─── ICONS ───
+const I = {
+  Plus:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  Search:     (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  Trash:      (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
+  Edit:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+  Cloud:      (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>`,
+  CloudOff:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`,
+  Refresh:    (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+  Download:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+  Sun:        (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
+  Moon:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
+  X:          (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  Check:      (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  ArrowUp:    (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`,
+  ArrowDown:  (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
+};
+
+const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(angka);
+
+// ─── TOAST ───
+// Komponen ini sebelumnya dipakai (<${Toast} .../>) tapi tidak pernah didefinisikan,
+// sehingga setiap notify() dipanggil (simpan/edit/hapus transaksi, sync, dsb) akan
+// melempar "ReferenceError: Toast is not defined" dan meng-crash render.
+function Toast({ msg, type }) {
+  const isErr = type === 'err';
+  return html`
+    <div class="toast" style=${{ background: isErr ? 'var(--expense)' : 'var(--ink)' }}>
+      ${isErr ? html`<${I.X} style=${{width:14,height:14}} />` : html`<${I.Check} style=${{width:14,height:14}} />`}
+      ${msg}
+    </div>
+  `;
+}
+
+function App() {
+  const [dark, setDark] = useState(() => LS.get('kas_theme') === 'dark');
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+    LS.set('kas_theme', dark ? 'dark' : 'light');
+  }, [dark]);
+
+  const [txs, setTxs] = useState(() => LS.get('kas_txs', []));
+  const [syncUrl, setSyncUrl] = useState(() => LS.get('kas_syncUrl', ''));
+  const [isSyncing, setIsSyncing] = useState(false);
+  
+  const [search, setSearch] = useState('');
+  const [filterType, setFilterType] = useState('Semua');
+  const [toast, setToast] = useState(null);
+  
+  const [modal, setModal] = useState(null); 
+  const [editingId, setEditingId] = useState(null);
+  
+  const emptyForm = { tanggal: new Date().toISOString().split('T')[0], keterangan: '', jenis: 'Pemasukan', nominal: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [tempUrl, setTempUrl] = useState('');
+  const [showGasInfo, setShowGasInfo] = useState(false);
+
+  const notify = useCallback((msg, type = 'ok') => {
+    setToast({ msg, type }); 
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const persist = useCallback((newTxs) => {
+    setTxs(newTxs);
+    LS.set('kas_txs', newTxs);
+    if (syncUrl) syncToCloud(newTxs, syncUrl);
+  }, [syncUrl]);
+
+  const syncToCloud = async (dataTxs, url) => {
+    if (!url) return;
+    setIsSyncing(true);
+    try {
+      await fetch(url, { method: 'POST', body: JSON.stringify({ txs: dataTxs }) });
+    } catch(e) { console.warn('Cloud sync failed', e); }
+    finally { setIsSyncing(false); }
+  };
+
+  const pullFromCloud = async (url) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if(data.txs) {
+        setTxs(data.txs);
+        LS.set('kas_txs', data.txs);
+        notify('Data tersinkronisasi dari Cloud!');
+      }
+    } catch(e) { notify('Gagal menarik data.', 'err'); }
+    finally { setIsSyncing(false); }
+  };
+
+  const handleSetSync = () => {
+    if(!tempUrl.trim()) return notify('URL tidak boleh kosong', 'err');
+    setSyncUrl(tempUrl.trim());
+    LS.set('kas_syncUrl', tempUrl.trim());
+    pullFromCloud(tempUrl.trim());
+    setModal(null);
+  };
+
+  const disconnectSync = () => {
+    if(!window.confirm('Putuskan koneksi ke Google Sheets? (Data lokal tetap aman)')) return;
+    setSyncUrl('');
+    LS.set('kas_syncUrl', '');
+    setModal(null);
+    notify('Beralih ke mode lokal murni.');
+  };
+
+  const openForm = (tx = null) => {
+    if(tx) {
+      setEditingId(tx.id);
+      setForm({ ...tx });
+    } else {
+      setEditingId(null);
+      setForm({ ...emptyForm, tanggal: new Date().toISOString().split('T')[0] });
+    }
+    setModal('form');
+  };
+
+  const saveTx = (e) => {
+    e.preventDefault();
+    if(!form.keterangan.trim() || !form.nominal) return notify('Keterangan & Nominal wajib diisi', 'err');
+    
+    const txData = {
+      ...form,
+      nominal: Number(form.nominal),
+      createdAt: editingId ? form.createdAt : new Date().toISOString()
+    };
+
+    let newTxs;
+    if(editingId) {
+      newTxs = txs.map(t => t.id === editingId ? { ...t, ...txData } : t);
+      notify('Transaksi diperbarui!');
+    } else {
+      txData.id = 'tx-' + Date.now().toString(36);
+      newTxs = [txData, ...txs];
+      notify('Transaksi dicatat!');
+    }
+    
+    // Sort descending by date
+    newTxs.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
+    persist(newTxs);
+    setModal(null);
+  };
+
+  const deleteTx = (id) => {
+    if(!window.confirm('Hapus transaksi ini?')) return;
+    persist(txs.filter(t => t.id !== id));
+    notify('Dihapus.');
+  };
+
+  const exportCSV = () => {
+    const headers = ['Tanggal', 'Keterangan', 'Jenis', 'Nominal'];
+    const rows = txs.map(t => [t.tanggal, `"${t.keterangan.replace(/"/g, '""')}"`, t.jenis, t.nominal]);
+    const csvStr = [headers, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Laporan_Kas_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    notify('Laporan CSV diunduh!');
+  };
+
+  const filteredTxs = useMemo(() => {
+    const q = search.toLowerCase();
+    return txs.filter(t => {
+      const matchType = filterType === 'Semua' || t.jenis === filterType;
+      const matchSearch = t.keterangan.toLowerCase().includes(q) || t.tanggal.includes(q);
+      return matchType && matchSearch;
+    });
+  }, [txs, search, filterType]);
+
+  const totalMasuk = useMemo(() => txs.filter(t => t.jenis === 'Pemasukan').reduce((s, t) => s + t.nominal, 0), [txs]);
+  const totalKeluar = useMemo(() => txs.filter(t => t.jenis === 'Pengeluaran').reduce((s, t) => s + t.nominal, 0), [txs]);
+  const saldo = totalMasuk - totalKeluar;
+
+  return html`
+    <div style=${{ minHeight:'100vh', display:'flex', flexDirection:'column' }}>
+      
+      <!-- HEADER -->
+      <header style=${{ background:'var(--card)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, zIndex:30, padding:'12px 20px' }}>
+        <div style=${{ maxWidth:800, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
+          <h1 style=${{ fontSize:18, fontWeight:700, letterSpacing:'-0.5px' }}>
+            Kas<span style=${{color:'var(--accent)'}}>Lite</span>
+          </h1>
+          
+          <div style=${{ flex:1, position:'relative', maxWidth: 300 }}>
+            <${I.Search} style=${{ width:16, height:16, position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--muted)' }} />
+            <input class="input-field" style=${{ paddingLeft:36, height:38, fontSize:13 }}
+              placeholder="Cari transaksi..." value=${search} onInput=${e => setSearch(e.target.value)} />
+          </div>
+
+          <div style=${{ display:'flex', gap:6 }}>
+            <button onClick=${exportCSV} class="btn-ghost hidden sm:inline-flex" title="Unduh CSV">
+              <${I.Download} style=${{width:16,height:16}} />
+            </button>
+            <button onClick=${() => { setTempUrl(syncUrl); setShowGasInfo(false); setModal('cloud'); }} class="btn-ghost" style=${{ color: syncUrl ? 'var(--accent)' : 'var(--muted)', borderColor: syncUrl ? 'var(--accent)' : 'var(--border)' }}>
+              ${isSyncing ? html`<${I.Refresh} class="spin" style=${{width:16,height:16}} />` : syncUrl ? html`<${I.Cloud} style=${{width:16,height:16}} />` : html`<${I.CloudOff} style=${{width:16,height:16}} />`}
+            </button>
+            <button onClick=${() => setDark(!dark)} class="btn-ghost">
+              ${dark ? html`<${I.Sun} style=${{width:16,height:16}} />` : html`<${I.Moon} style=${{width:16,height:16}} />`}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- MAIN CONTENT -->
+      <main style=${{ flex:1, maxWidth:800, margin:'0 auto', width:'100%', padding:'20px' }}>
+        
+        <!-- DASHBOARD SALDO -->
+        <div class="card anim-up" style=${{ padding:20, display:'flex', flexDirection:'column', gap:16, marginBottom:24, background: dark ? 'var(--card)' : 'linear-gradient(135deg, #111827 0%, #1f2937 100%)', color:'#fff', border:'none' }}>
+          <div>
+            <div style=${{ fontSize:12, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'1px', marginBottom:4 }}>Total Saldo</div>
+            <div style=${{ fontSize:32, fontWeight:700, letterSpacing:'-1px' }}>${formatRp(saldo)}</div>
+          </div>
+          <div style=${{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, borderTop:'1px solid rgba(255,255,255,0.1)', paddingTop:16 }}>
+            <div>
+              <div style=${{ fontSize:11, color:'#9ca3af', display:'flex', alignItems:'center', gap:4 }}><${I.ArrowUp} style=${{width:12,height:12,color:'#34d399'}}/> Pemasukan</div>
+              <div style=${{ fontSize:16, fontWeight:600, marginTop:2 }}>${formatRp(totalMasuk)}</div>
+            </div>
+            <div>
+              <div style=${{ fontSize:11, color:'#9ca3af', display:'flex', alignItems:'center', gap:4 }}><${I.ArrowDown} style=${{width:12,height:12,color:'#f87171'}}/> Pengeluaran</div>
+              <div style=${{ fontSize:16, fontWeight:600, marginTop:2 }}>${formatRp(totalKeluar)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FILTER & ADD BUTTON -->
+        <div style=${{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <div style=${{ display:'flex', gap:8, background:'var(--paper2)', padding:4, borderRadius:10, border:'1px solid var(--border)' }}>
+            ${['Semua', 'Pemasukan', 'Pengeluaran'].map(f => html`
+              <button key=${f} onClick=${() => setFilterType(f)}
+                style=${{ padding:'6px 12px', fontSize:12, fontWeight:600, borderRadius:6, transition:'all 0.15s',
+                          background: filterType === f ? 'var(--card)' : 'transparent',
+                          color: filterType === f ? 'var(--ink)' : 'var(--muted)',
+                          boxShadow: filterType === f ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
+                ${f}
+              </button>
+            `)}
+          </div>
+          <button class="btn-primary" onClick=${() => openForm()}>
+            <${I.Plus} style=${{width:16,height:16}} /> Catat
+          </button>
+        </div>
+
+        <!-- TRANSACTION LIST -->
+        ${filteredTxs.length === 0 ? html`
+          <div class="anim-up" style=${{ textAlign:'center', padding:'60px 20px', color:'var(--muted)' }}>
+            <div style=${{ width:48, height:48, background:'var(--paper2)', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px' }}>
+              <${I.Search} style=${{width:24,height:24}} />
+            </div>
+            <p style=${{ fontSize:14 }}>Tidak ada transaksi ditemukan.</p>
+          </div>
+        ` : html`
+          <div style=${{ display:'flex', flexDirection:'column', gap:10 }}>${filteredTxs.map((tx, idx) => html`
+              <div key=${tx.id} class="card anim-up" style=${{ animationDelay:`${idx*0.03}s`, padding:16, display:'flex', alignItems:'center', gap:12 }}>
+                <div style=${{ width:40, height:40, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                               background: tx.jenis === 'Pemasukan' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                               color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--expense)' }}>
+                  ${tx.jenis === 'Pemasukan' ? html`<${I.ArrowUp} style=${{width:20,height:20}}/>` : html`<${I.ArrowDown} style=${{width:20,height:20}}/>`}
+                </div>
+                <div style=${{ flex:1, minWidth:0 }}>
+                  <div style=${{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>${tx.keterangan}</div>
+                  <div style=${{ fontSize:12, color:'var(--muted)', marginTop:2 }}>${tx.tanggal}</div>
+                </div>
+                <div style=${{ textAlign:'right', flexShrink:0 }}>
+                  <div style=${{ fontSize:14, fontWeight:700, color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--ink)' }}>
+                    ${tx.jenis === 'Pemasukan' ? '+' : '-'}${formatRp(tx.nominal)}
+                  </div>
+                  <div style=${{ display:'flex', gap:4, justifyContent:'flex-end', marginTop:4 }}>
+                    <button class="btn-ghost" style=${{padding:'4px 6px', border:'none'}} onClick=${() => openForm(tx)}><${I.Edit} style=${{width:14,height:14}}/></button>
+                    <button class="btn-ghost" style=${{padding:'4px 6px', border:'none', color:'var(--expense)'}} onClick=${() => deleteTx(tx.id)}><${I.Trash} style=${{width:14,height:14}}/></button>
+                  </div>
+                </div>
+              </div>
+            `)}
+          </div>
+        `}
+      </main>
+
+      <!-- FORM MODAL -->
+      ${modal === 'form' && html`
+        <div class="modal-overlay anim-in" onClick=${e => e.target === e.currentTarget && setModal(null)}>
+          <div class="modal-box anim-up">
+            <div style=${{ padding:'16px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <h3 style=${{ fontSize:16, fontWeight:700 }}>${editingId ? 'Edit Transaksi' : 'Catat Transaksi'}</h3>
+              <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal(null)}><${I.X} style=${{width:20,height:20}} /></button>
+            </div>
+            <form onSubmit=${saveTx} style=${{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+              
+              <div style=${{ display:'flex', gap:12, background:'var(--paper2)', padding:4, borderRadius:8, border:'1px solid var(--border)' }}>${['Pemasukan', 'Pengeluaran'].map(j => html`
+                  <button type="button" key=${j} onClick=${() => setForm(f => ({...f, jenis: j}))}
+                    style=${{ flex:1, padding:'8px', fontSize:13, fontWeight:600, borderRadius:6, transition:'all 0.15s',
+                              background: form.jenis === j ? 'var(--card)' : 'transparent',
+                              color: form.jenis === j ? (j === 'Pemasukan' ? 'var(--accent)' : 'var(--expense)') : 'var(--muted)',
+                              boxShadow: form.jenis === j ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
+                    ${j}
+                  </button>
+                `)}
+              </div>
+
+              <div>
+                <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Tanggal</label>
+                <input type="date" class="input-field" required
+                  value=${form.tanggal} onInput=${e => setForm(f => ({...f, tanggal: e.target.value}))} />
+              </div>
+              
+              <div>
+                <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Keterangan</label>
+                <input type="text" class="input-field" placeholder="Contoh: Makan siang..." required
+                  value=${form.keterangan} onInput=${e => setForm(f => ({...f, keterangan: e.target.value}))} />
+              </div>
+
+              <div>
+                <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Nominal (Rp)</label>
+                <input type="number" class="input-field" placeholder="50000" min="1" required
+                  value=${form.nominal} onInput=${e => setForm(f => ({...f, nominal: e.target.value}))} />
+              </div>
+
+              <button type="submit" class="btn-primary" style=${{ width:'100%', justifyContent:'center', padding:'12px', marginTop:8 }}>
+                <${I.Check} style=${{width:16,height:16}} /> Simpan
+              </button>
+            </form>
+          </div>
+        </div>
+      `}
+
+      <!-- CLOUD SYNC MODAL -->
+      ${modal === 'cloud' && html`
+        <div class="modal-overlay anim-in" onClick=${e => e.target === e.currentTarget && setModal(null)}>
+          <div class="modal-box anim-up">
+            <div style=${{ padding:'16px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style=${{ display:'flex', alignItems:'center', gap:8 }}>
+                <${I.Cloud} style=${{width:20,height:20,color:'var(--accent)'}} />
+                <h3 style=${{ fontSize:16, fontWeight:700 }}>Google Sheets Sync</h3>
+              </div>
+              <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal(null)}><${I.X} style=${{width:20,height:20}} /></button>
+            </div>
+            
+            <div style=${{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>${syncUrl ? html`
+                <div style=${{ padding:14, background:'rgba(16,185,129,0.1)', borderRadius:8, color:'var(--accent)', fontSize:13, fontWeight:500, display:'flex', gap:8 }}>
+                  <${I.Check} style=${{width:18,height:18,flexShrink:0}} />
+                  Terhubung ke Google Sheets. Data tersinkronisasi otomatis setiap ada perubahan lokal.
+                </div>
+                <button onClick=${disconnectSync} class="btn-ghost" style=${{ width:'100%', justifyContent:'center', color:'var(--expense)', borderColor:'var(--expense)' }}>
+                  <${I.CloudOff} style=${{width:16,height:16}} /> Putuskan Koneksi
+                </button>
+              ` : html`
+                <div>
+                  <button type="button" onClick=${() => setShowGasInfo(!showGasInfo)} class="btn-ghost" style=${{ border:'none', padding:0, color:'#3b82f6', fontSize:13, marginBottom:12 }}>
+                    ${showGasInfo ? 'Sembunyikan Panduan Backend' : 'Lihat Panduan Setup Backend (GAS)'}
+                  </button>
+                  ${showGasInfo && html`
+                    <div style=${{ padding:12, background:'var(--paper2)', borderRadius:8, border:'1px solid var(--border)', marginBottom:16 }}>                       <ol style=${{ fontSize:12, color:'var(--muted)', paddingLeft:16, margin:0, lineHeight:1.6 }}>
+                        <li>Buka spreadsheet baru, klik Ekstensi > Apps Script.</li>
+                        <li>Salin kode di bawah, terapkan sebagai Web App (Anyone).</li>
+                        <li>Masukkan URL Web App ke form di bawah ini.</li>
+                      </ol>
+                      <pre style=${{ background:'#000', color:'#4ade80', padding:10, borderRadius:6, fontSize:10, marginTop:10, overflowX:'auto' }}>${GAS_TEMPLATE}</pre>
+                    </div>
+                  `}
+                  
+                  <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Web App URL</label>
+                  <input type="url" class="input-field" placeholder="https://script.google.com/macros/s/..."
+                    value=${tempUrl} onInput=${e => setTempUrl(e.target.value)} />
+                </div>
+                
+                <button onClick=${handleSetSync} class="btn-primary" style=${{ width:'100%', justifyContent:'center' }}>
+                  <${I.Cloud} style=${{width:16,height:16}} /> Sambungkan & Tarik Data
+                </button>
+              `}
+            </div>
+          </div>
+        </div>
+      `}
+
+      ${toast && html`<${Toast} msg=${toast.msg} type=${toast.type} />`}
+    </div>
+  `;
+}
+
+render(html`<${App} />`, document.getElementById('root'));
+</script>
+</body>
+</html>
