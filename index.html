@@ -42,7 +42,7 @@
     -webkit-font-smoothing: antialiased;
     transition: background 0.2s, color 0.2s;
   }
-  
+
   @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
   @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
   @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
@@ -51,7 +51,7 @@
 
   .anim-up { animation: fadeUp 0.3s ease-out both; }
   .anim-in { animation: fadeIn 0.2s ease-out both; }
-  
+
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     box-shadow: var(--shadow);
@@ -91,6 +91,30 @@
     position: fixed; bottom: 24px; right: 24px; z-index: 200; background: var(--ink); color: var(--paper);
     padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px;
     box-shadow: 0 8px 20px rgba(0,0,0,0.15); animation: slideIn 0.3s cubic-bezier(0.34,1.2,0.64,1) both;
+    max-width: calc(100vw - 48px);
+  }
+
+  .tab-bar { display:flex; gap:4px; background:var(--paper2); padding:4px; border-radius:10px; border:1px solid var(--border); width:fit-content; }
+  .tab-btn {
+    padding:8px 16px; font-size:12px; font-weight:600; border-radius:7px; color:var(--muted);
+    cursor:pointer; transition:all .15s; border:none; background:transparent; display:inline-flex; align-items:center; gap:6px;
+  }
+  .tab-btn.active { background:var(--card); color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.1); }
+
+  .chip {
+    display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:6px;
+    font-size:10px; font-weight:700; background:var(--paper2); color:var(--muted); border:1px solid var(--border);
+    white-space:nowrap;
+  }
+
+  .list-row {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; background:var(--paper2); border-radius:8px; border:1px solid var(--border);
+  }
+
+  .lock-screen {
+    position: fixed; inset: 0; background: var(--paper); z-index: 500;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px;
   }
 </style>
 </head>
@@ -99,27 +123,47 @@
 
 <script type="module">
 import { h, render } from 'https://esm.sh/preact@10.19.6';
-import { useState, useMemo, useEffect, useCallback } from 'https://esm.sh/preact@10.19.6/hooks';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'https://esm.sh/preact@10.19.6/hooks';
 import htm from 'https://esm.sh/htm@3.1.1';
 
 const html = htm.bind(h);
 
 const GAS_TEMPLATE = `// Gunakan ini pada Google Apps Script (script.new)
+// v2: mendukung kolom Kategori & Dompet, plus mode sinkronisasi "merge" (gabung by ID)
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-    
-    // Mode Sinkronisasi Total (Frontend adalah master)
-    sheet.clear(); 
-    sheet.appendRow(["ID", "Tanggal", "Keterangan", "Jenis", "Nominal", "Timestamp"]);
-    sheet.getRange(1, 1, 1, 6).setFontWeight("bold");
-    
-    if(data.txs && data.txs.length > 0) {
-      var rows = data.txs.map(function(t) {
-        return [t.id, t.tanggal, t.keterangan, t.jenis, t.nominal, t.createdAt];
+    var mode = data.mode || 'overwrite';
+    var HEADERS = ["ID", "Tanggal", "Keterangan", "Jenis", "Kategori", "Dompet", "Nominal", "Timestamp"];
+
+    if (mode === 'merge') {
+      // Gabung berdasarkan ID: baris yang sudah ada di Sheet tapi tidak dikirim dari
+      // frontend akan TETAP dipertahankan (aman kalau Sheet juga diedit manual).
+      var existing = sheet.getDataRange().getValues();
+      var map = {};
+      for (var i = 1; i < existing.length; i++) {
+        if (existing[i][0]) map[existing[i][0]] = existing[i];
+      }
+      (data.txs || []).forEach(function(t) {
+        map[t.id] = [t.id, t.tanggal, t.keterangan, t.jenis, t.kategori || '', t.wallet || '', t.nominal, t.createdAt];
       });
-      sheet.getRange(2, 1, rows.length, 6).setValues(rows);
+      sheet.clear();
+      sheet.appendRow(HEADERS);
+      sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight("bold");
+      var mergedRows = Object.keys(map).map(function(k) { return map[k]; });
+      if (mergedRows.length) sheet.getRange(2, 1, mergedRows.length, HEADERS.length).setValues(mergedRows);
+    } else {
+      // Mode Sinkronisasi Total (Frontend adalah master)
+      sheet.clear();
+      sheet.appendRow(HEADERS);
+      sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight("bold");
+      if (data.txs && data.txs.length > 0) {
+        var rows = data.txs.map(function(t) {
+          return [t.id, t.tanggal, t.keterangan, t.jenis, t.kategori || '', t.wallet || '', t.nominal, t.createdAt];
+        });
+        sheet.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
+      }
     }
     return ContentService.createTextOutput(JSON.stringify({ok: true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
@@ -135,8 +179,9 @@ function doGet(e) {
   for(var i = 1; i < data.length; i++) {
     if(data[i][0]) {
       txs.push({
-        id: data[i][0], tanggal: data[i][1], keterangan: data[i][2],
-        jenis: data[i][3], nominal: Number(data[i][4]), createdAt: data[i][5]
+        id: data[i][0], tanggal: data[i][1], keterangan: data[i][2], jenis: data[i][3],
+        kategori: data[i][4] || '', wallet: data[i][5] || '',
+        nominal: Number(data[i][6]), createdAt: data[i][7]
       });
     }
   }
@@ -149,6 +194,42 @@ const LS = {
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 };
 
+// ─── KONSTANTA ───
+const DEFAULT_CATEGORIES = ['Gaji','Bonus','Hadiah','Makan','Transport','Belanja','Tagihan','Hiburan','Kesehatan','Pendidikan','Lainnya'];
+const DEFAULT_WALLETS = ['Tunai'];
+const PALETTE = ['#10b981','#f59e0b','#3b82f6','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316'];
+
+// ─── HELPER ───
+function simpleHash(s) {
+  // Bukan kriptografi asli — cuma agar PIN tidak tersimpan sebagai teks polos.
+  // Data transaksi tetap tersimpan apa adanya di localStorage.
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  return lines.slice(1).map(line => {
+    const cells = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else cur += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { cells.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    cells.push(cur);
+    return cells;
+  });
+}
+
 // ─── ICONS ───
 const I = {
   Plus:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
@@ -159,69 +240,229 @@ const I = {
   CloudOff:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`,
   Refresh:    (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
   Download:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+  Upload:     (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
   Sun:        (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
   Moon:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
   X:          (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   Check:      (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`,
   ArrowUp:    (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`,
-  ArrowDown:  (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
+  ArrowDown:  (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`,
+  Settings:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  Wallet:     (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+  Repeat:     (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+  Lock:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+  BarChart:   (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
+  Filter:     (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>`,
+  List:       (p) => html`<svg ...${p} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`
 };
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(angka);
 
-// ─── TOAST ───
-// Komponen ini sebelumnya dipakai (<${Toast} .../>) tapi tidak pernah didefinisikan,
-// sehingga setiap notify() dipanggil (simpan/edit/hapus transaksi, sync, dsb) akan
-// melempar "ReferenceError: Toast is not defined" dan meng-crash render.
-function Toast({ msg, type }) {
+// ─── TOAST (mendukung tombol aksi, mis. "URUNGKAN") ───
+function Toast({ msg, type, action }) {
   const isErr = type === 'err';
   return html`
     <div class="toast" style=${{ background: isErr ? 'var(--expense)' : 'var(--ink)' }}>
-      ${isErr ? html`<${I.X} style=${{width:14,height:14}} />` : html`<${I.Check} style=${{width:14,height:14}} />`}
-      ${msg}
+      ${isErr ? html`<${I.X} style=${{width:14,height:14,flexShrink:0}} />` : html`<${I.Check} style=${{width:14,height:14,flexShrink:0}} />`}
+      <span>${msg}</span>
+      ${action && html`
+        <button onClick=${action.onClick} style=${{ background:'rgba(255,255,255,0.2)', border:'none', color:'inherit', borderRadius:6, padding:'2px 8px', fontSize:12, fontWeight:700, cursor:'pointer', marginLeft:4, flexShrink:0 }}>
+          ${action.label}
+        </button>
+      `}
+    </div>
+  `;
+}
+
+// ─── GRAFIK TREN (SVG bar chart, tanpa dependency) ───
+function TrendChart({ data }) {
+  const max = Math.max(1, ...data.map(d => Math.max(d.masuk, d.keluar)));
+  const w = 600, h = 180, barW = 18;
+  const gap = (w - data.length * barW * 2) / (data.length + 1);
+  return html`
+    <svg viewBox="0 0 ${w} ${h}" style=${{ width:'100%', height:'auto', overflow:'visible' }}>
+      ${data.map((d, i) => {
+        const x = gap + i * (barW * 2 + gap);
+        const hMasuk = (d.masuk / max) * (h - 30);
+        const hKeluar = (d.keluar / max) * (h - 30);
+        return html`
+          <g key=${d.key}>
+            <rect x=${x} y=${h - 20 - hMasuk} width=${barW} height=${hMasuk} rx="3" fill="var(--accent)" />
+            <rect x=${x + barW} y=${h - 20 - hKeluar} width=${barW} height=${hKeluar} rx="3" fill="var(--expense)" />
+            <text x=${x + barW} y=${h - 4} text-anchor="middle" font-size="10" fill="var(--muted)">${d.label}</text>
+          </g>
+        `;
+      })}
+    </svg>
+  `;
+}
+
+// ─── DONUT KATEGORI (SVG stroke-dasharray, tanpa dependency) ───
+function CategoryDonut({ data }) {
+  if (!data.length) return html`<p style=${{ fontSize:13, color:'var(--muted)', textAlign:'center', padding:'20px 0' }}>Belum ada pengeluaran bulan ini.</p>`;
+  let cumulative = 0;
+  return html`
+    <div style=${{ display:'flex', alignItems:'center', gap:20, flexWrap:'wrap' }}>
+      <svg viewBox="0 0 120 120" style=${{ width:120, height:120, flexShrink:0, transform:'rotate(-90deg)' }}>
+        ${data.map((c, i) => {
+          const el = html`<circle cx="60" cy="60" r="45" fill="none" stroke=${PALETTE[i % PALETTE.length]} stroke-width="18" stroke-dasharray="${c.pct} ${100 - c.pct}" stroke-dashoffset=${-cumulative} pathLength="100" />`;
+          cumulative += c.pct;
+          return el;
+        })}
+      </svg>
+      <div style=${{ flex:1, minWidth:160, display:'flex', flexDirection:'column', gap:6 }}>
+        ${data.map((c, i) => html`
+          <div key=${c.kategori} style=${{ display:'flex', alignItems:'center', gap:8, fontSize:12 }}>
+            <span style=${{ width:10, height:10, borderRadius:3, background:PALETTE[i % PALETTE.length], flexShrink:0 }}></span>
+            <span style=${{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>${c.kategori}</span>
+            <span style=${{ fontWeight:700, flexShrink:0 }}>${c.pct.toFixed(0)}%</span>
+          </div>
+        `)}
+      </div>
+    </div>
+  `;
+}
+
+// ─── RINGKASAN BULAN INI VS BULAN LALU ───
+function MonthCompareCard({ cur, prev }) {
+  const delta = (curVal, prevVal) => prevVal ? ((curVal - prevVal) / prevVal) * 100 : null;
+  const dMasuk = delta(cur.masuk, prev.masuk);
+  const dKeluar = delta(cur.keluar, prev.keluar);
+  const renderDelta = (d, goodIfUp) => {
+    if (d === null) return html`<span style=${{ fontSize:11, color:'var(--muted)' }}>Baru</span>`;
+    const up = d >= 0;
+    const good = goodIfUp ? up : !up;
+    return html`
+      <span style=${{ fontSize:11, fontWeight:700, color: good ? 'var(--accent)' : 'var(--expense)', display:'inline-flex', alignItems:'center', gap:2 }}>
+        ${up ? html`<${I.ArrowUp} style=${{width:10,height:10}}/>` : html`<${I.ArrowDown} style=${{width:10,height:10}}/>`}
+        ${Math.abs(d).toFixed(0)}% vs bulan lalu
+      </span>
+    `;
+  };
+  return html`
+    <div class="card" style=${{ padding:16, display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+      <div>
+        <div style=${{ fontSize:11, color:'var(--muted)', fontWeight:600, textTransform:'uppercase', marginBottom:4 }}>Pemasukan Bulan Ini</div>
+        <div style=${{ fontSize:18, fontWeight:700 }}>${formatRp(cur.masuk)}</div>
+        ${renderDelta(dMasuk, true)}
+      </div>
+      <div>
+        <div style=${{ fontSize:11, color:'var(--muted)', fontWeight:600, textTransform:'uppercase', marginBottom:4 }}>Pengeluaran Bulan Ini</div>
+        <div style=${{ fontSize:18, fontWeight:700 }}>${formatRp(cur.keluar)}</div>
+        ${renderDelta(dKeluar, false)}
+      </div>
     </div>
   `;
 }
 
 function App() {
+  // ── Tema ──
   const [dark, setDark] = useState(() => LS.get('kas_theme') === 'dark');
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
     LS.set('kas_theme', dark ? 'dark' : 'light');
   }, [dark]);
 
+  // ── Kunci PIN ──
+  const [pinHash, setPinHash] = useState(() => LS.get('kas_pin', null));
+  const [unlocked, setUnlocked] = useState(() => !LS.get('kas_pin', null));
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState(false);
+  const [newPinInput, setNewPinInput] = useState('');
+
+  // ── Data inti ──
   const [txs, setTxs] = useState(() => LS.get('kas_txs', []));
+  const [categories, setCategories] = useState(() => LS.get('kas_categories', DEFAULT_CATEGORIES));
+  const [wallets, setWallets] = useState(() => LS.get('kas_wallets', DEFAULT_WALLETS));
+  const [recurring, setRecurring] = useState(() => LS.get('kas_recurring', []));
+
+  // ── Cloud sync ──
   const [syncUrl, setSyncUrl] = useState(() => LS.get('kas_syncUrl', ''));
+  const [syncMode, setSyncMode] = useState(() => LS.get('kas_syncMode', 'overwrite'));
   const [isSyncing, setIsSyncing] = useState(false);
-  
+
+  // ── Filter & tampilan ──
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Semua');
+  const [filterWallet, setFilterWallet] = useState('Semua');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortBy, setSortBy] = useState('tanggal');
+  const [sortDir, setSortDir] = useState('desc');
+  const [showAdvFilter, setShowAdvFilter] = useState(false);
+  const [activeTab, setActiveTab] = useState('transaksi');
+
   const [toast, setToast] = useState(null);
-  
-  const [modal, setModal] = useState(null); 
+  const toastTimer = useRef(null);
+
+  const [modal, setModal] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  
-  const emptyForm = { tanggal: new Date().toISOString().split('T')[0], keterangan: '', jenis: 'Pemasukan', nominal: '' };
+
+  const emptyForm = { tanggal: new Date().toISOString().split('T')[0], keterangan: '', jenis: 'Pemasukan', kategori: '', wallet: wallets[0] || 'Tunai', nominal: '' };
   const [form, setForm] = useState(emptyForm);
   const [tempUrl, setTempUrl] = useState('');
   const [showGasInfo, setShowGasInfo] = useState(false);
+  const [newWalletName, setNewWalletName] = useState('');
 
-  const notify = useCallback((msg, type = 'ok') => {
-    setToast({ msg, type }); 
-    setTimeout(() => setToast(null), 3000);
+  const emptyRecurringForm = { keterangan: '', jenis: 'Pengeluaran', kategori: '', wallet: wallets[0] || 'Tunai', nominal: '', dayOfMonth: '1' };
+  const [recurringForm, setRecurringForm] = useState(emptyRecurringForm);
+
+  const notify = useCallback((msg, type = 'ok', action = null) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ msg, type, action });
+    toastTimer.current = setTimeout(() => setToast(null), action ? 5000 : 3000);
+  }, []);
+
+  // ── Migrasi data lama + jalankan transaksi berulang yang jatuh tempo (sekali saat app dibuka) ──
+  useEffect(() => {
+    let workingTxs = txs;
+    let changed = false;
+
+    if (workingTxs.some(t => t.kategori === undefined || t.wallet === undefined)) {
+      workingTxs = workingTxs.map(t => ({
+        ...t,
+        kategori: t.kategori || 'Lainnya',
+        wallet: t.wallet || (wallets[0] || 'Tunai')
+      }));
+      changed = true;
+    }
+
+    const today = new Date();
+    const periodKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    const due = recurring.filter(r => r.lastRun !== periodKey && today.getDate() >= r.dayOfMonth);
+    if (due.length) {
+      const generated = due.map(r => ({
+        id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        tanggal: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(r.dayOfMonth).padStart(2, '0')}`,
+        keterangan: r.keterangan + ' (Otomatis)', jenis: r.jenis, kategori: r.kategori, wallet: r.wallet,
+        nominal: r.nominal, createdAt: new Date().toISOString(), recurringId: r.id
+      }));
+      workingTxs = [...generated, ...workingTxs];
+      changed = true;
+      const newRecurring = recurring.map(r => due.find(d => d.id === r.id) ? { ...r, lastRun: periodKey } : r);
+      setRecurring(newRecurring);
+      LS.set('kas_recurring', newRecurring);
+      notify(`${due.length} transaksi berulang otomatis dicatat.`);
+    }
+
+    if (changed) {
+      setTxs(workingTxs);
+      LS.set('kas_txs', workingTxs);
+    }
+    // eslint-disable-next-line
   }, []);
 
   const persist = useCallback((newTxs) => {
     setTxs(newTxs);
     LS.set('kas_txs', newTxs);
     if (syncUrl) syncToCloud(newTxs, syncUrl);
-  }, [syncUrl]);
+  }, [syncUrl, syncMode]);
 
   const syncToCloud = async (dataTxs, url) => {
     if (!url) return;
     setIsSyncing(true);
     try {
-      await fetch(url, { method: 'POST', body: JSON.stringify({ txs: dataTxs }) });
+      await fetch(url, { method: 'POST', body: JSON.stringify({ txs: dataTxs, mode: syncMode }) });
     } catch(e) { console.warn('Cloud sync failed', e); }
     finally { setIsSyncing(false); }
   };
@@ -232,8 +473,9 @@ function App() {
       const res = await fetch(url);
       const data = await res.json();
       if(data.txs) {
-        setTxs(data.txs);
-        LS.set('kas_txs', data.txs);
+        const normalized = data.txs.map(t => ({ ...t, kategori: t.kategori || 'Lainnya', wallet: t.wallet || (wallets[0] || 'Tunai'), nominal: Number(t.nominal) }));
+        setTxs(normalized);
+        LS.set('kas_txs', normalized);
         notify('Data tersinkronisasi dari Cloud!');
       }
     } catch(e) { notify('Gagal menarik data.', 'err'); }
@@ -270,12 +512,20 @@ function App() {
   const saveTx = (e) => {
     e.preventDefault();
     if(!form.keterangan.trim() || !form.nominal) return notify('Keterangan & Nominal wajib diisi', 'err');
-    
+
+    const kategoriFinal = (form.kategori || '').trim() || 'Lainnya';
     const txData = {
       ...form,
+      kategori: kategoriFinal,
       nominal: Number(form.nominal),
       createdAt: editingId ? form.createdAt : new Date().toISOString()
     };
+
+    if (!categories.includes(kategoriFinal)) {
+      const newCategories = [...categories, kategoriFinal];
+      setCategories(newCategories);
+      LS.set('kas_categories', newCategories);
+    }
 
     let newTxs;
     if(editingId) {
@@ -286,22 +536,34 @@ function App() {
       newTxs = [txData, ...txs];
       notify('Transaksi dicatat!');
     }
-    
-    // Sort descending by date
-    newTxs.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
+
     persist(newTxs);
     setModal(null);
   };
 
   const deleteTx = (id) => {
-    if(!window.confirm('Hapus transaksi ini?')) return;
+    const idx = txs.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    const deletedTx = txs[idx];
     persist(txs.filter(t => t.id !== id));
-    notify('Dihapus.');
+    notify('Transaksi dihapus.', 'ok', {
+      label: 'URUNGKAN',
+      onClick: () => {
+        setTxs(curr => {
+          const restored = [...curr];
+          restored.splice(idx, 0, deletedTx);
+          LS.set('kas_txs', restored);
+          if (syncUrl) syncToCloud(restored, syncUrl);
+          return restored;
+        });
+        setToast(null);
+      }
+    });
   };
 
   const exportCSV = () => {
-    const headers = ['Tanggal', 'Keterangan', 'Jenis', 'Nominal'];
-    const rows = txs.map(t => [t.tanggal, `"${t.keterangan.replace(/"/g, '""')}"`, t.jenis, t.nominal]);
+    const headers = ['Tanggal', 'Keterangan', 'Jenis', 'Kategori', 'Dompet', 'Nominal'];
+    const rows = txs.map(t => [t.tanggal, `"${t.keterangan.replace(/"/g, '""')}"`, t.jenis, t.kategori || '', t.wallet || '', t.nominal]);
     const csvStr = [headers, ...rows].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -312,29 +574,227 @@ function App() {
     notify('Laporan CSV diunduh!');
   };
 
+  const importCSVFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const rows = parseCSV(ev.target.result);
+        const newItems = rows.filter(r => r.length >= 6 && r[0]).map(r => ({
+          id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          tanggal: r[0], keterangan: r[1],
+          jenis: r[2] === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran',
+          kategori: r[3] || 'Lainnya', wallet: r[4] || (wallets[0] || 'Tunai'),
+          nominal: Number(r[5]) || 0, createdAt: new Date().toISOString()
+        }));
+        if (!newItems.length) { notify('Tidak ada baris valid ditemukan di CSV.', 'err'); return; }
+        persist([...newItems, ...txs]);
+        notify(`${newItems.length} transaksi diimpor dari CSV.`);
+      } catch(err) { notify('Gagal membaca file CSV.', 'err'); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const exportJSON = () => {
+    const backup = { txs, categories, wallets, recurring, syncMode, exportedAt: new Date().toISOString(), version: 2 };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `KasLite_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    notify('Backup JSON diunduh!');
+  };
+
+  const importJSONFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!window.confirm('Impor akan MENGGANTI semua data lokal saat ini (transaksi, dompet, kategori, template berulang). Lanjutkan?')) return;
+        const newTxs = Array.isArray(data.txs) ? data.txs : [];
+        const newCategories = (Array.isArray(data.categories) && data.categories.length) ? data.categories : DEFAULT_CATEGORIES;
+        const newWallets = (Array.isArray(data.wallets) && data.wallets.length) ? data.wallets : DEFAULT_WALLETS;
+        const newRecurring = Array.isArray(data.recurring) ? data.recurring : [];
+        setTxs(newTxs); LS.set('kas_txs', newTxs);
+        setCategories(newCategories); LS.set('kas_categories', newCategories);
+        setWallets(newWallets); LS.set('kas_wallets', newWallets);
+        setRecurring(newRecurring); LS.set('kas_recurring', newRecurring);
+        notify('Data berhasil diimpor!');
+      } catch(err) { notify('File JSON tidak valid.', 'err'); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const addWallet = () => {
+    const name = newWalletName.trim();
+    if (!name) return notify('Nama dompet wajib diisi', 'err');
+    if (wallets.includes(name)) return notify('Dompet sudah ada', 'err');
+    const newWallets = [...wallets, name];
+    setWallets(newWallets); LS.set('kas_wallets', newWallets);
+    setNewWalletName('');
+    notify('Dompet ditambahkan.');
+  };
+
+  const removeWallet = (name) => {
+    if (wallets.length <= 1) return notify('Minimal harus ada 1 dompet', 'err');
+    if (txs.some(t => t.wallet === name)) return notify('Tidak bisa hapus, masih dipakai transaksi', 'err');
+    const newWallets = wallets.filter(w => w !== name);
+    setWallets(newWallets); LS.set('kas_wallets', newWallets);
+    notify('Dompet dihapus.');
+  };
+
+  const addRecurring = (e) => {
+    e.preventDefault();
+    if (!recurringForm.keterangan.trim() || !recurringForm.nominal) return notify('Keterangan & Nominal wajib diisi', 'err');
+    const item = {
+      id: 'rec-' + Date.now().toString(36),
+      keterangan: recurringForm.keterangan.trim(),
+      jenis: recurringForm.jenis,
+      kategori: (recurringForm.kategori || '').trim() || 'Lainnya',
+      wallet: recurringForm.wallet,
+      nominal: Number(recurringForm.nominal),
+      dayOfMonth: Math.min(28, Math.max(1, Number(recurringForm.dayOfMonth) || 1)),
+      lastRun: null
+    };
+    const newRecurring = [...recurring, item];
+    setRecurring(newRecurring); LS.set('kas_recurring', newRecurring);
+    setRecurringForm(emptyRecurringForm);
+    notify('Transaksi berulang ditambahkan.');
+  };
+
+  const removeRecurring = (id) => {
+    const newRecurring = recurring.filter(r => r.id !== id);
+    setRecurring(newRecurring); LS.set('kas_recurring', newRecurring);
+    notify('Template dihapus.');
+  };
+
+  const setNewPin = (pin) => {
+    if (!pin || pin.length < 4) return notify('PIN minimal 4 digit', 'err');
+    const h = simpleHash(pin);
+    setPinHash(h); LS.set('kas_pin', h);
+    notify('PIN diaktifkan.');
+  };
+  const removePin = () => {
+    if (!window.confirm('Nonaktifkan kunci PIN?')) return;
+    setPinHash(null); LS.set('kas_pin', null);
+    notify('PIN dinonaktifkan.');
+  };
+  const trySubmitPin = (e) => {
+    e.preventDefault();
+    if (simpleHash(pinInput) === pinHash) { setUnlocked(true); setPinInput(''); setPinError(false); }
+    else { setPinError(true); setPinInput(''); }
+  };
+
   const filteredTxs = useMemo(() => {
     const q = search.toLowerCase();
-    return txs.filter(t => {
+    let list = txs.filter(t => {
       const matchType = filterType === 'Semua' || t.jenis === filterType;
-      const matchSearch = t.keterangan.toLowerCase().includes(q) || t.tanggal.includes(q);
-      return matchType && matchSearch;
+      const matchWallet = filterWallet === 'Semua' || t.wallet === filterWallet;
+      const matchSearch = t.keterangan.toLowerCase().includes(q) || t.tanggal.includes(q) || (t.kategori || '').toLowerCase().includes(q);
+      const matchDate = (!dateFrom || t.tanggal >= dateFrom) && (!dateTo || t.tanggal <= dateTo);
+      return matchType && matchWallet && matchSearch && matchDate;
     });
-  }, [txs, search, filterType]);
+    list = [...list].sort((a, b) => {
+      const diff = sortBy === 'nominal' ? (a.nominal - b.nominal) : (new Date(a.tanggal) - new Date(b.tanggal));
+      return sortDir === 'asc' ? diff : -diff;
+    });
+    return list;
+  }, [txs, search, filterType, filterWallet, dateFrom, dateTo, sortBy, sortDir]);
 
   const totalMasuk = useMemo(() => txs.filter(t => t.jenis === 'Pemasukan').reduce((s, t) => s + t.nominal, 0), [txs]);
   const totalKeluar = useMemo(() => txs.filter(t => t.jenis === 'Pengeluaran').reduce((s, t) => s + t.nominal, 0), [txs]);
   const saldo = totalMasuk - totalKeluar;
 
+  const saldoPerWallet = useMemo(() => {
+    const map = {};
+    wallets.forEach(w => { map[w] = 0; });
+    txs.forEach(t => {
+      if (map[t.wallet] === undefined) map[t.wallet] = 0;
+      map[t.wallet] += t.jenis === 'Pemasukan' ? t.nominal : -t.nominal;
+    });
+    return map;
+  }, [txs, wallets]);
+
+  const monthlyTrend = useMemo(() => {
+    const map = {};
+    txs.forEach(t => {
+      const key = t.tanggal.slice(0, 7);
+      if (!map[key]) map[key] = { masuk: 0, keluar: 0 };
+      if (t.jenis === 'Pemasukan') map[key].masuk += t.nominal; else map[key].keluar += t.nominal;
+    });
+    const months = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const agg = map[key] || { masuk: 0, keluar: 0 };
+      months.push({ key, label: d.toLocaleDateString('id-ID', { month: 'short' }), masuk: agg.masuk, keluar: agg.keluar });
+    }
+    return months;
+  }, [txs]);
+
+  const categoryBreakdown = useMemo(() => {
+    const now = new Date();
+    const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const map = {};
+    txs.filter(t => t.jenis === 'Pengeluaran' && t.tanggal.startsWith(periodKey)).forEach(t => {
+      const k = t.kategori || 'Lainnya';
+      map[k] = (map[k] || 0) + t.nominal;
+    });
+    const total = Object.values(map).reduce((a, b) => a + b, 0);
+    return Object.entries(map)
+      .map(([kategori, nominal]) => ({ kategori, nominal, pct: total ? (nominal / total * 100) : 0 }))
+      .sort((a, b) => b.nominal - a.nominal);
+  }, [txs]);
+
+  const monthCompare = useMemo(() => {
+    const now = new Date();
+    const curKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const prevD = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevKey = `${prevD.getFullYear()}-${String(prevD.getMonth() + 1).padStart(2, '0')}`;
+    const sum = (key, jenis) => txs.filter(t => t.tanggal.startsWith(key) && t.jenis === jenis).reduce((s, t) => s + t.nominal, 0);
+    return {
+      cur: { masuk: sum(curKey, 'Pemasukan'), keluar: sum(curKey, 'Pengeluaran') },
+      prev: { masuk: sum(prevKey, 'Pemasukan'), keluar: sum(prevKey, 'Pengeluaran') }
+    };
+  }, [txs]);
+
+  const advFilterActive = filterWallet !== 'Semua' || dateFrom || dateTo || sortBy !== 'tanggal' || sortDir !== 'desc';
+
+  // ── Layar kunci PIN ──
+  if (pinHash && !unlocked) {
+    return html`
+      <div class="lock-screen">
+        <${I.Lock} style=${{ width:36, height:36, color:'var(--muted)' }} />
+        <h2 style=${{ fontSize:18, fontWeight:700 }}>KasLite Terkunci</h2>
+        <form onSubmit=${trySubmitPin} style=${{ display:'flex', flexDirection:'column', gap:12, width:'100%', maxWidth:280 }}>
+          <input type="password" inputmode="numeric" class="input-field" style=${{ textAlign:'center', fontSize:20, letterSpacing:8 }}
+            placeholder="••••" value=${pinInput} onInput=${e => { setPinInput(e.target.value); setPinError(false); }} autofocus />
+          ${pinError && html`<div style=${{ color:'var(--expense)', fontSize:12, textAlign:'center' }}>PIN salah, coba lagi.</div>`}
+          <button type="submit" class="btn-primary" style=${{ justifyContent:'center' }}>Buka</button>
+        </form>
+      </div>
+    `;
+  }
+
   return html`
     <div style=${{ minHeight:'100vh', display:'flex', flexDirection:'column' }}>
-      
+
+      <datalist id="kategori-datalist">${categories.map(c => html`<option value=${c} />`)}</datalist>
+
       <!-- HEADER -->
       <header style=${{ background:'var(--card)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, zIndex:30, padding:'12px 20px' }}>
         <div style=${{ maxWidth:800, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
           <h1 style=${{ fontSize:18, fontWeight:700, letterSpacing:'-0.5px' }}>
             Kas<span style=${{color:'var(--accent)'}}>Lite</span>
           </h1>
-          
+
           <div style=${{ flex:1, position:'relative', maxWidth: 300 }}>
             <${I.Search} style=${{ width:16, height:16, position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--muted)' }} />
             <input class="input-field" style=${{ paddingLeft:36, height:38, fontSize:13 }}
@@ -342,8 +802,8 @@ function App() {
           </div>
 
           <div style=${{ display:'flex', gap:6 }}>
-            <button onClick=${exportCSV} class="btn-ghost hidden sm:inline-flex" title="Unduh CSV">
-              <${I.Download} style=${{width:16,height:16}} />
+            <button onClick=${() => setModal('settings')} class="btn-ghost" title="Pengaturan">
+              <${I.Settings} style=${{width:16,height:16}} />
             </button>
             <button onClick=${() => { setTempUrl(syncUrl); setShowGasInfo(false); setModal('cloud'); }} class="btn-ghost" style=${{ color: syncUrl ? 'var(--accent)' : 'var(--muted)', borderColor: syncUrl ? 'var(--accent)' : 'var(--border)' }}>
               ${isSyncing ? html`<${I.Refresh} class="spin" style=${{width:16,height:16}} />` : syncUrl ? html`<${I.Cloud} style=${{width:16,height:16}} />` : html`<${I.CloudOff} style=${{width:16,height:16}} />`}
@@ -357,7 +817,7 @@ function App() {
 
       <!-- MAIN CONTENT -->
       <main style=${{ flex:1, maxWidth:800, margin:'0 auto', width:'100%', padding:'20px' }}>
-        
+
         <!-- DASHBOARD SALDO -->
         <div class="card anim-up" style=${{ padding:20, display:'flex', flexDirection:'column', gap:16, marginBottom:24, background: dark ? 'var(--card)' : 'linear-gradient(135deg, #111827 0%, #1f2937 100%)', color:'#fff', border:'none' }}>
           <div>
@@ -374,57 +834,143 @@ function App() {
               <div style=${{ fontSize:16, fontWeight:600, marginTop:2 }}>${formatRp(totalKeluar)}</div>
             </div>
           </div>
+          ${wallets.length > 1 && html`
+            <div style=${{ display:'flex', gap:8, flexWrap:'wrap', borderTop:'1px solid rgba(255,255,255,0.1)', paddingTop:12 }}>
+              ${wallets.map(w => html`
+                <span key=${w} class="chip" style=${{ background:'rgba(255,255,255,0.1)', color:'#fff', borderColor:'rgba(255,255,255,0.2)' }}>${w}: ${formatRp(saldoPerWallet[w] || 0)}</span>
+              `)}
+            </div>
+          `}
         </div>
 
-        <!-- FILTER & ADD BUTTON -->
-        <div style=${{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-          <div style=${{ display:'flex', gap:8, background:'var(--paper2)', padding:4, borderRadius:10, border:'1px solid var(--border)' }}>
-            ${['Semua', 'Pemasukan', 'Pengeluaran'].map(f => html`
-              <button key=${f} onClick=${() => setFilterType(f)}
-                style=${{ padding:'6px 12px', fontSize:12, fontWeight:600, borderRadius:6, transition:'all 0.15s',
-                          background: filterType === f ? 'var(--card)' : 'transparent',
-                          color: filterType === f ? 'var(--ink)' : 'var(--muted)',
-                          boxShadow: filterType === f ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
-                ${f}
-              </button>
-            `)}
-          </div>
-          <button class="btn-primary" onClick=${() => openForm()}>
-            <${I.Plus} style=${{width:16,height:16}} /> Catat
+        <!-- TAB BAR -->
+        <div class="tab-bar" style=${{ marginBottom:16 }}>
+          <button class=${`tab-btn ${activeTab === 'transaksi' ? 'active' : ''}`} onClick=${() => setActiveTab('transaksi')}>
+            <${I.List} style=${{width:14,height:14}}/> Transaksi
+          </button>
+          <button class=${`tab-btn ${activeTab === 'analisis' ? 'active' : ''}`} onClick=${() => setActiveTab('analisis')}>
+            <${I.BarChart} style=${{width:14,height:14}}/> Analisis
           </button>
         </div>
 
-        <!-- TRANSACTION LIST -->
-        ${filteredTxs.length === 0 ? html`
-          <div class="anim-up" style=${{ textAlign:'center', padding:'60px 20px', color:'var(--muted)' }}>
-            <div style=${{ width:48, height:48, background:'var(--paper2)', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px' }}>
-              <${I.Search} style=${{width:24,height:24}} />
-            </div>
-            <p style=${{ fontSize:14 }}>Tidak ada transaksi ditemukan.</p>
-          </div>
-        ` : html`
-          <div style=${{ display:'flex', flexDirection:'column', gap:10 }}>${filteredTxs.map((tx, idx) => html`
-              <div key=${tx.id} class="card anim-up" style=${{ animationDelay:`${idx*0.03}s`, padding:16, display:'flex', alignItems:'center', gap:12 }}>
-                <div style=${{ width:40, height:40, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
-                               background: tx.jenis === 'Pemasukan' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                               color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--expense)' }}>
-                  ${tx.jenis === 'Pemasukan' ? html`<${I.ArrowUp} style=${{width:20,height:20}}/>` : html`<${I.ArrowDown} style=${{width:20,height:20}}/>`}
-                </div>
-                <div style=${{ flex:1, minWidth:0 }}>
-                  <div style=${{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>${tx.keterangan}</div>
-                  <div style=${{ fontSize:12, color:'var(--muted)', marginTop:2 }}>${tx.tanggal}</div>
-                </div>
-                <div style=${{ textAlign:'right', flexShrink:0 }}>
-                  <div style=${{ fontSize:14, fontWeight:700, color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--ink)' }}>
-                    ${tx.jenis === 'Pemasukan' ? '+' : '-'}${formatRp(tx.nominal)}
-                  </div>
-                  <div style=${{ display:'flex', gap:4, justifyContent:'flex-end', marginTop:4 }}>
-                    <button class="btn-ghost" style=${{padding:'4px 6px', border:'none'}} onClick=${() => openForm(tx)}><${I.Edit} style=${{width:14,height:14}}/></button>
-                    <button class="btn-ghost" style=${{padding:'4px 6px', border:'none', color:'var(--expense)'}} onClick=${() => deleteTx(tx.id)}><${I.Trash} style=${{width:14,height:14}}/></button>
-                  </div>
-                </div>
+        ${activeTab === 'transaksi' ? html`
+          <!-- FILTER & ADD BUTTON -->
+          <div style=${{ display:'flex', flexDirection:'column', gap:10, marginBottom:16 }}>
+            <div style=${{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:10 }}>
+              <div style=${{ display:'flex', gap:8, background:'var(--paper2)', padding:4, borderRadius:10, border:'1px solid var(--border)' }}>
+                ${['Semua', 'Pemasukan', 'Pengeluaran'].map(f => html`
+                  <button key=${f} onClick=${() => setFilterType(f)}
+                    style=${{ padding:'6px 12px', fontSize:12, fontWeight:600, borderRadius:6, transition:'all 0.15s',
+                              background: filterType === f ? 'var(--card)' : 'transparent',
+                              color: filterType === f ? 'var(--ink)' : 'var(--muted)',
+                              boxShadow: filterType === f ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>
+                    ${f}
+                  </button>
+                `)}
               </div>
-            `)}
+              <div style=${{ display:'flex', gap:8 }}>
+                <button class="btn-ghost" onClick=${() => setShowAdvFilter(!showAdvFilter)} style=${{ color: advFilterActive ? 'var(--accent)' : 'var(--muted)', borderColor: advFilterActive ? 'var(--accent)' : 'var(--border)' }}>
+                  <${I.Filter} style=${{width:14,height:14}}/> Filter
+                </button>
+                <button class="btn-primary" onClick=${() => openForm()}>
+                  <${I.Plus} style=${{width:16,height:16}} /> Catat
+                </button>
+              </div>
+            </div>
+
+            ${showAdvFilter && html`
+              <div class="card anim-up" style=${{ padding:14, display:'flex', flexDirection:'column', gap:10 }}>
+                <div style=${{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                  <div>
+                    <label style=${{ fontSize:11, fontWeight:600, color:'var(--muted)', display:'block', marginBottom:4 }}>Dompet</label>
+                    <select class="input-field" value=${filterWallet} onChange=${e => setFilterWallet(e.target.value)}>
+                      <option value="Semua">Semua Dompet</option>
+                      ${wallets.map(w => html`<option value=${w}>${w}</option>`)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style=${{ fontSize:11, fontWeight:600, color:'var(--muted)', display:'block', marginBottom:4 }}>Urutkan</label>
+                    <div style=${{ display:'flex', gap:6 }}>
+                      <select class="input-field" value=${sortBy} onChange=${e => setSortBy(e.target.value)}>
+                        <option value="tanggal">Tanggal</option>
+                        <option value="nominal">Nominal</option>
+                      </select>
+                      <button class="btn-ghost" onClick=${() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')} style=${{ flexShrink:0, padding:'8px 10px' }}>
+                        ${sortDir === 'asc' ? html`<${I.ArrowUp} style=${{width:14,height:14}}/>` : html`<${I.ArrowDown} style=${{width:14,height:14}}/>`}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div style=${{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                  <div>
+                    <label style=${{ fontSize:11, fontWeight:600, color:'var(--muted)', display:'block', marginBottom:4 }}>Dari Tanggal</label>
+                    <input type="date" class="input-field" value=${dateFrom} onInput=${e => setDateFrom(e.target.value)} />
+                  </div>
+                  <div>
+                    <label style=${{ fontSize:11, fontWeight:600, color:'var(--muted)', display:'block', marginBottom:4 }}>Sampai Tanggal</label>
+                    <input type="date" class="input-field" value=${dateTo} onInput=${e => setDateTo(e.target.value)} />
+                  </div>
+                </div>
+                ${advFilterActive && html`
+                  <button class="btn-ghost" style=${{ alignSelf:'flex-start', fontSize:12 }} onClick=${() => { setFilterWallet('Semua'); setDateFrom(''); setDateTo(''); setSortBy('tanggal'); setSortDir('desc'); }}>Reset Filter</button>
+                `}
+              </div>
+            `}
+          </div>
+
+          <!-- TRANSACTION LIST -->
+          ${filteredTxs.length === 0 ? html`
+            <div class="anim-up" style=${{ textAlign:'center', padding:'60px 20px', color:'var(--muted)' }}>
+              <div style=${{ width:48, height:48, background:'var(--paper2)', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px' }}>
+                <${I.Search} style=${{width:24,height:24}} />
+              </div>
+              <p style=${{ fontSize:14 }}>Tidak ada transaksi ditemukan.</p>
+            </div>
+          ` : html`
+            <div style=${{ display:'flex', flexDirection:'column', gap:10 }}>${filteredTxs.map((tx, idx) => html`
+                <div key=${tx.id} class="card anim-up" style=${{ animationDelay:`${idx * 0.03}s`, padding:16, display:'flex', alignItems:'center', gap:12 }}>
+                  <div style=${{ width:40, height:40, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                                 background: tx.jenis === 'Pemasukan' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                                 color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--expense)' }}>
+                    ${tx.jenis === 'Pemasukan' ? html`<${I.ArrowUp} style=${{width:20,height:20}}/>` : html`<${I.ArrowDown} style=${{width:20,height:20}}/>`}
+                  </div>
+                  <div style=${{ flex:1, minWidth:0 }}>
+                    <div style=${{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>${tx.keterangan}</div>
+                    <div style=${{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
+                      <span style=${{ fontSize:12, color:'var(--muted)' }}>${tx.tanggal}</span>
+                      ${tx.kategori && html`<span class="chip">${tx.kategori}</span>`}
+                      ${wallets.length > 1 && tx.wallet && html`<span class="chip">${tx.wallet}</span>`}
+                    </div>
+                  </div>
+                  <div style=${{ textAlign:'right', flexShrink:0 }}>
+                    <div style=${{ fontSize:14, fontWeight:700, color: tx.jenis === 'Pemasukan' ? 'var(--accent)' : 'var(--ink)' }}>
+                      ${tx.jenis === 'Pemasukan' ? '+' : '-'}${formatRp(tx.nominal)}
+                    </div>
+                    <div style=${{ display:'flex', gap:4, justifyContent:'flex-end', marginTop:4 }}>
+                      <button class="btn-ghost" style=${{padding:'4px 6px', border:'none'}} onClick=${() => openForm(tx)}><${I.Edit} style=${{width:14,height:14}}/></button>
+                      <button class="btn-ghost" style=${{padding:'4px 6px', border:'none', color:'var(--expense)'}} onClick=${() => deleteTx(tx.id)}><${I.Trash} style=${{width:14,height:14}}/></button>
+                    </div>
+                  </div>
+                </div>
+              `)}
+            </div>
+          `}
+        ` : html`
+          <!-- ANALISIS -->
+          <div style=${{ display:'flex', flexDirection:'column', gap:20 }}>
+            <${MonthCompareCard} cur=${monthCompare.cur} prev=${monthCompare.prev} />
+            <div class="card" style=${{ padding:20 }}>
+              <h3 style=${{ fontSize:14, fontWeight:700, marginBottom:16 }}>Tren 6 Bulan Terakhir</h3>
+              <${TrendChart} data=${monthlyTrend} />
+              <div style=${{ display:'flex', gap:16, justifyContent:'center', marginTop:12, fontSize:11, color:'var(--muted)' }}>
+                <span style=${{ display:'flex', alignItems:'center', gap:4 }}><span style=${{width:8,height:8,borderRadius:2,background:'var(--accent)'}}></span> Pemasukan</span>
+                <span style=${{ display:'flex', alignItems:'center', gap:4 }}><span style=${{width:8,height:8,borderRadius:2,background:'var(--expense)'}}></span> Pengeluaran</span>
+              </div>
+            </div>
+            <div class="card" style=${{ padding:20 }}>
+              <h3 style=${{ fontSize:14, fontWeight:700, marginBottom:16 }}>Pengeluaran per Kategori (Bulan Ini)</h3>
+              <${CategoryDonut} data=${categoryBreakdown} />
+            </div>
           </div>
         `}
       </main>
@@ -438,7 +984,7 @@ function App() {
               <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal(null)}><${I.X} style=${{width:20,height:20}} /></button>
             </div>
             <form onSubmit=${saveTx} style=${{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
-              
+
               <div style=${{ display:'flex', gap:12, background:'var(--paper2)', padding:4, borderRadius:8, border:'1px solid var(--border)' }}>${['Pemasukan', 'Pengeluaran'].map(j => html`
                   <button type="button" key=${j} onClick=${() => setForm(f => ({...f, jenis: j}))}
                     style=${{ flex:1, padding:'8px', fontSize:13, fontWeight:600, borderRadius:6, transition:'all 0.15s',
@@ -455,11 +1001,25 @@ function App() {
                 <input type="date" class="input-field" required
                   value=${form.tanggal} onInput=${e => setForm(f => ({...f, tanggal: e.target.value}))} />
               </div>
-              
+
               <div>
                 <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Keterangan</label>
                 <input type="text" class="input-field" placeholder="Contoh: Makan siang..." required
                   value=${form.keterangan} onInput=${e => setForm(f => ({...f, keterangan: e.target.value}))} />
+              </div>
+
+              <div style=${{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                <div>
+                  <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Kategori</label>
+                  <input type="text" class="input-field" list="kategori-datalist" placeholder="Pilih/ketik baru"
+                    value=${form.kategori} onInput=${e => setForm(f => ({...f, kategori: e.target.value}))} />
+                </div>
+                <div>
+                  <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Dompet</label>
+                  <select class="input-field" value=${form.wallet} onChange=${e => setForm(f => ({...f, wallet: e.target.value}))}>
+                    ${wallets.map(w => html`<option value=${w}>${w}</option>`)}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -476,6 +1036,120 @@ function App() {
         </div>
       `}
 
+      <!-- SETTINGS MODAL -->
+      ${modal === 'settings' && html`
+        <div class="modal-overlay anim-in" onClick=${e => e.target === e.currentTarget && setModal(null)}>
+          <div class="modal-box anim-up">
+            <div style=${{ padding:'16px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <h3 style=${{ fontSize:16, fontWeight:700 }}>Pengaturan</h3>
+              <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal(null)}><${I.X} style=${{width:20,height:20}} /></button>
+            </div>
+            <div style=${{ padding:20, display:'flex', flexDirection:'column', gap:24 }}>
+
+              <div>
+                <h4 style=${{ fontSize:13, fontWeight:700, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}><${I.Wallet} style=${{width:14,height:14}}/> Dompet</h4>
+                <div style=${{ display:'flex', flexDirection:'column', gap:6, marginBottom:10 }}>
+                  ${wallets.map(w => html`
+                    <div key=${w} class="list-row">
+                      <span style=${{ fontSize:13, fontWeight:600, flex:1 }}>${w}</span>
+                      <span style=${{ fontSize:12, color:'var(--muted)' }}>${formatRp(saldoPerWallet[w] || 0)}</span>
+                      <button class="btn-ghost" style=${{ padding:'4px', border:'none', color:'var(--expense)' }} onClick=${() => removeWallet(w)}><${I.Trash} style=${{width:14,height:14}}/></button>
+                    </div>
+                  `)}
+                </div>
+                <div style=${{ display:'flex', gap:8 }}>
+                  <input type="text" class="input-field" placeholder="Nama dompet baru" value=${newWalletName} onInput=${e => setNewWalletName(e.target.value)} />
+                  <button onClick=${addWallet} class="btn-primary">Tambah</button>
+                </div>
+              </div>
+
+              <div>
+                <h4 style=${{ fontSize:13, fontWeight:700, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}><${I.Repeat} style=${{width:14,height:14}}/> Transaksi Berulang</h4>
+                <p style=${{ fontSize:12, color:'var(--muted)', marginBottom:10 }}>${recurring.length} template aktif. Dicatat otomatis tiap bulan saat app dibuka.</p>
+                <button onClick=${() => setModal('recurring')} class="btn-ghost" style=${{ width:'100%', justifyContent:'center' }}>Kelola Transaksi Berulang</button>
+              </div>
+
+              <div>
+                <h4 style=${{ fontSize:13, fontWeight:700, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}><${I.Lock} style=${{width:14,height:14}}/> Keamanan</h4>
+                ${pinHash ? html`
+                  <button onClick=${removePin} class="btn-ghost" style=${{ width:'100%', justifyContent:'center', color:'var(--expense)', borderColor:'var(--expense)' }}>Nonaktifkan PIN</button>
+                ` : html`
+                  <div style=${{ display:'flex', gap:8 }}>
+                    <input type="password" inputmode="numeric" class="input-field" placeholder="PIN baru (min 4 digit)" value=${newPinInput} onInput=${e => setNewPinInput(e.target.value)} />
+                    <button onClick=${() => { setNewPin(newPinInput); setNewPinInput(''); }} class="btn-primary">Set</button>
+                  </div>
+                `}
+                <p style=${{ fontSize:11, color:'var(--muted)', marginTop:6 }}>Catatan: ini kunci lokal sederhana, bukan enkripsi. Data tetap tersimpan apa adanya di browser.</p>
+              </div>
+
+              <div>
+                <h4 style=${{ fontSize:13, fontWeight:700, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}><${I.Download} style=${{width:14,height:14}}/> Backup & Restore</h4>
+                <div style=${{ display:'flex', flexDirection:'column', gap:8 }}>
+                  <button onClick=${exportJSON} class="btn-ghost" style=${{ justifyContent:'center' }}><${I.Download} style=${{width:14,height:14}}/> Ekspor JSON (Backup Lengkap)</button>
+                  <label class="btn-ghost" style=${{ justifyContent:'center', cursor:'pointer' }}>
+                    <${I.Upload} style=${{width:14,height:14}}/> Impor JSON
+                    <input type="file" accept="application/json" style=${{display:'none'}} onChange=${importJSONFile} />
+                  </label>
+                  <button onClick=${exportCSV} class="btn-ghost" style=${{ justifyContent:'center' }}><${I.Download} style=${{width:14,height:14}}/> Ekspor CSV</button>
+                  <label class="btn-ghost" style=${{ justifyContent:'center', cursor:'pointer' }}>
+                    <${I.Upload} style=${{width:14,height:14}}/> Impor CSV
+                    <input type="file" accept=".csv" style=${{display:'none'}} onChange=${importCSVFile} />
+                  </label>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      `}
+
+      <!-- RECURRING MODAL -->
+      ${modal === 'recurring' && html`
+        <div class="modal-overlay anim-in" onClick=${e => e.target === e.currentTarget && setModal('settings')}>
+          <div class="modal-box anim-up">
+            <div style=${{ padding:'16px 20px', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <h3 style=${{ fontSize:16, fontWeight:700 }}>Transaksi Berulang</h3>
+              <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal('settings')}><${I.X} style=${{width:20,height:20}} /></button>
+            </div>
+            <div style=${{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+              <div style=${{ display:'flex', flexDirection:'column', gap:8 }}>
+                ${recurring.length === 0 ? html`<p style=${{ fontSize:13, color:'var(--muted)', textAlign:'center' }}>Belum ada transaksi berulang.</p>` : recurring.map(r => html`
+                  <div key=${r.id} class="list-row">
+                    <div style=${{ display:'flex', flexDirection:'column' }}>
+                      <span style=${{ fontSize:13, fontWeight:600 }}>${r.keterangan}</span>
+                      <span style=${{ fontSize:11, color:'var(--muted)' }}>Tgl ${r.dayOfMonth} • ${r.jenis} • ${formatRp(r.nominal)} • ${r.wallet}</span>
+                    </div>
+                    <button class="btn-ghost" style=${{ padding:'4px', border:'none', color:'var(--expense)' }} onClick=${() => removeRecurring(r.id)}><${I.Trash} style=${{width:14,height:14}}/></button>
+                  </div>
+                `)}
+              </div>
+              <form onSubmit=${addRecurring} style=${{ display:'flex', flexDirection:'column', gap:10, borderTop:'1px solid var(--border)', paddingTop:16 }}>
+                <div style=${{ display:'flex', gap:12, background:'var(--paper2)', padding:4, borderRadius:8, border:'1px solid var(--border)' }}>${['Pemasukan', 'Pengeluaran'].map(j => html`
+                  <button type="button" key=${j} onClick=${() => setRecurringForm(f => ({...f, jenis: j}))}
+                    style=${{ flex:1, padding:'6px', fontSize:12, fontWeight:600, borderRadius:6,
+                              background: recurringForm.jenis === j ? 'var(--card)' : 'transparent',
+                              color: recurringForm.jenis === j ? (j === 'Pemasukan' ? 'var(--accent)' : 'var(--expense)') : 'var(--muted)' }}>${j}</button>
+                `)}</div>
+                <input type="text" class="input-field" placeholder="Keterangan (mis: Gaji Bulanan)" required
+                  value=${recurringForm.keterangan} onInput=${e => setRecurringForm(f => ({...f, keterangan: e.target.value}))} />
+                <input type="text" class="input-field" list="kategori-datalist" placeholder="Kategori"
+                  value=${recurringForm.kategori} onInput=${e => setRecurringForm(f => ({...f, kategori: e.target.value}))} />
+                <select class="input-field" value=${recurringForm.wallet} onChange=${e => setRecurringForm(f => ({...f, wallet: e.target.value}))}>
+                  ${wallets.map(w => html`<option value=${w}>${w}</option>`)}
+                </select>
+                <div style=${{ display:'flex', gap:8 }}>
+                  <input type="number" class="input-field" placeholder="Nominal" min="1" required
+                    value=${recurringForm.nominal} onInput=${e => setRecurringForm(f => ({...f, nominal: e.target.value}))} />
+                  <input type="number" class="input-field" placeholder="Tgl (1-28)" min="1" max="28" style=${{maxWidth:110}}
+                    value=${recurringForm.dayOfMonth} onInput=${e => setRecurringForm(f => ({...f, dayOfMonth: e.target.value}))} />
+                </div>
+                <button type="submit" class="btn-primary" style=${{ justifyContent:'center' }}><${I.Plus} style=${{width:14,height:14}}/> Tambah Template</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      `}
+
       <!-- CLOUD SYNC MODAL -->
       ${modal === 'cloud' && html`
         <div class="modal-overlay anim-in" onClick=${e => e.target === e.currentTarget && setModal(null)}>
@@ -487,12 +1161,40 @@ function App() {
               </div>
               <button class="btn-ghost" style=${{ padding:'4px', border:'none' }} onClick=${() => setModal(null)}><${I.X} style=${{width:20,height:20}} /></button>
             </div>
-            
+
             <div style=${{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>${syncUrl ? html`
                 <div style=${{ padding:14, background:'rgba(16,185,129,0.1)', borderRadius:8, color:'var(--accent)', fontSize:13, fontWeight:500, display:'flex', gap:8 }}>
                   <${I.Check} style=${{width:18,height:18,flexShrink:0}} />
                   Terhubung ke Google Sheets. Data tersinkronisasi otomatis setiap ada perubahan lokal.
                 </div>
+
+                <div>
+                  <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Mode Sinkronisasi</label>
+                  <div style=${{ display:'flex', gap:8, background:'var(--paper2)', padding:4, borderRadius:8, border:'1px solid var(--border)' }}>
+                    ${[['overwrite','Timpa Total'],['merge','Gabung (Aman)']].map(pair => html`
+                      <button key=${pair[0]} onClick=${() => { setSyncMode(pair[0]); LS.set('kas_syncMode', pair[0]); }}
+                        style=${{ flex:1, padding:'8px', fontSize:12, fontWeight:600, borderRadius:6,
+                                  background: syncMode === pair[0] ? 'var(--card)' : 'transparent',
+                                  color: syncMode === pair[0] ? 'var(--ink)' : 'var(--muted)' }}>${pair[1]}</button>
+                    `)}
+                  </div>
+                  <p style=${{ fontSize:11, color:'var(--muted)', marginTop:6 }}>"Gabung" menggabungkan data berdasarkan ID — lebih aman kalau Sheet juga diedit manual. Pastikan skrip GAS backend sudah versi terbaru (lihat panduan di bawah).</p>
+                </div>
+
+                <button type="button" onClick=${() => setShowGasInfo(!showGasInfo)} class="btn-ghost" style=${{ border:'none', padding:0, color:'#3b82f6', fontSize:13 }}>
+                  ${showGasInfo ? 'Sembunyikan Panduan Backend' : 'Lihat Panduan Setup Backend (GAS)'}
+                </button>
+                ${showGasInfo && html`
+                  <div style=${{ padding:12, background:'var(--paper2)', borderRadius:8, border:'1px solid var(--border)' }}>
+                    <ol style=${{ fontSize:12, color:'var(--muted)', paddingLeft:16, margin:0, lineHeight:1.6 }}>
+                      <li>Buka spreadsheet baru, klik Ekstensi > Apps Script.</li>
+                      <li>Salin kode di bawah (ganti seluruh isi editor), terapkan sebagai Web App (Anyone).</li>
+                      <li>Deploy ulang jika sebelumnya sudah pernah setup, agar kolom Kategori & Dompet ikut tersimpan.</li>
+                    </ol>
+                    <pre style=${{ background:'#000', color:'#4ade80', padding:10, borderRadius:6, fontSize:10, marginTop:10, overflowX:'auto' }}>${GAS_TEMPLATE}</pre>
+                  </div>
+                `}
+
                 <button onClick=${disconnectSync} class="btn-ghost" style=${{ width:'100%', justifyContent:'center', color:'var(--expense)', borderColor:'var(--expense)' }}>
                   <${I.CloudOff} style=${{width:16,height:16}} /> Putuskan Koneksi
                 </button>
@@ -502,7 +1204,8 @@ function App() {
                     ${showGasInfo ? 'Sembunyikan Panduan Backend' : 'Lihat Panduan Setup Backend (GAS)'}
                   </button>
                   ${showGasInfo && html`
-                    <div style=${{ padding:12, background:'var(--paper2)', borderRadius:8, border:'1px solid var(--border)', marginBottom:16 }}>                       <ol style=${{ fontSize:12, color:'var(--muted)', paddingLeft:16, margin:0, lineHeight:1.6 }}>
+                    <div style=${{ padding:12, background:'var(--paper2)', borderRadius:8, border:'1px solid var(--border)', marginBottom:16 }}>
+                      <ol style=${{ fontSize:12, color:'var(--muted)', paddingLeft:16, margin:0, lineHeight:1.6 }}>
                         <li>Buka spreadsheet baru, klik Ekstensi > Apps Script.</li>
                         <li>Salin kode di bawah, terapkan sebagai Web App (Anyone).</li>
                         <li>Masukkan URL Web App ke form di bawah ini.</li>
@@ -510,12 +1213,12 @@ function App() {
                       <pre style=${{ background:'#000', color:'#4ade80', padding:10, borderRadius:6, fontSize:10, marginTop:10, overflowX:'auto' }}>${GAS_TEMPLATE}</pre>
                     </div>
                   `}
-                  
+
                   <label style=${{ fontSize:12, fontWeight:600, display:'block', marginBottom:6 }}>Web App URL</label>
                   <input type="url" class="input-field" placeholder="https://script.google.com/macros/s/..."
                     value=${tempUrl} onInput=${e => setTempUrl(e.target.value)} />
                 </div>
-                
+
                 <button onClick=${handleSetSync} class="btn-primary" style=${{ width:'100%', justifyContent:'center' }}>
                   <${I.Cloud} style=${{width:16,height:16}} /> Sambungkan & Tarik Data
                 </button>
@@ -525,7 +1228,7 @@ function App() {
         </div>
       `}
 
-      ${toast && html`<${Toast} msg=${toast.msg} type=${toast.type} />`}
+      ${toast && html`<${Toast} msg=${toast.msg} type=${toast.type} action=${toast.action} />`}
     </div>
   `;
 }
